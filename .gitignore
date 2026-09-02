@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Secrets never belong in the repo.
+token.txt
+.env
+
+# Local run state. The queue is a working artifact, not source.
+data/bellhaven.sqlite3
+data/cron.log
+*.zip

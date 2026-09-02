@@ -1,0 +1,75 @@
+# Bellhaven CRM sync - daily reconciliation.
+#
+# Copy to .github/workflows/ to activate. This workflow deliberately stops at
+# the proposal stage: it never calls `run.py apply`, so no CRM write can happen
+# without a human in the review app.
+name: bellhaven-daily-sync
+
+on:
+  schedule:
+    - cron: "15 11 * * *"   # 06:15 America/New_York (UTC-5); 07:15 in DST
+  workflow_dispatch:
+
+concurrency:
+  group: bellhaven-sync      # never let two runs race on the queue
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"   # no dependencies to install: stdlib only
+
+      # The queue is state. Restoring it is what makes re-runs idempotent:
+      # without it every run would re-propose everything already decided.
+      - name: Restore proposal queue
+        uses: actions/cache/restore@v4
+        with:
+          path: data/bellhaven.sqlite3
+          key: bellhaven-queue-${{ github.run_id }}
+          restore-keys: bellhaven-queue-
+
+      - name: Run tests
+        run: python -m unittest discover -s tests
+
+      - name: Fetch website + CRM, generate proposals
+        env:
+          BELLHAVEN_TOKEN: ${{ secrets.BELLHAVEN_TOKEN }}
+          BELLHAVEN_PROFILE: conservative
+        run: python run.py daily
+
+      - name: Summary
+        run: python run.py status | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Save proposal queue
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: data/bellhaven.sqlite3
+          key: bellhaven-queue-${{ github.run_id }}
+
+      # The snapshot is the audit trail: it is the exact input that produced
+      # today's proposals, so any decision can be reproduced later.
+      - name: Upload snapshot + queue
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bellhaven-snapshot-${{ github.run_id }}
+          path: |
+            data/snapshot/
+            data/bellhaven.sqlite3
+          retention-days: 30
+
+      - name: Notify if the queue is waiting
+        if: always()
+        run: |
+          PENDING=$(python -c "from bellhaven import store; print(store.Store().counts().get('pending',0))")
+          echo "pending=$PENDING" >> "$GITHUB_OUTPUT"
+          if [ "$PENDING" -gt 0 ]; then
+            echo "::warning::$PENDING proposal(s) awaiting review - run 'python run.py review'"
+          fi

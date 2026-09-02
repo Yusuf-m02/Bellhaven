@@ -1,0 +1,21 @@
+# Bellhaven CRM sync - daily reconciliation
+#
+#   crontab -l > cur; cat ops/crontab.txt >> cur; crontab cur
+#
+# `daily` = fetch + pipeline. It only ever WRITES to the local SQLite queue.
+# Nothing reaches the CRM until a human approves in the review app, so this is
+# safe to run unattended. Re-runs are idempotent: a proposal that was already
+# approved, rejected or applied is never raised again.
+
+BELLHAVEN_TOKEN=bh_replace_me
+BELLHAVEN_PROFILE=conservative
+
+# 06:15 every day, before the sales team logs in.
+15 6 * * *  cd /opt/bellhaven-crm && /usr/bin/python3 run.py daily >> data/cron.log 2>&1
+
+# Mondays: e-mail whoever owns the queue if anything is waiting.
+0 8 * * 1   cd /opt/bellhaven-crm && /usr/bin/python3 run.py status | mail -s "Bellhaven CRM review queue" salesops@example.com
+
+# Deliberately NOT scheduled:
+#   run.py apply    - writes to the CRM, and only ever runs from the review app
+#                     or by hand after a person has approved the proposals.
